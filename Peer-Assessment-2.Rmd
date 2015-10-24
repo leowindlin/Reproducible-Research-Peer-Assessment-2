@@ -1,0 +1,210 @@
+---
+title: "Peer-Assessment-2"
+author: Leonardo Windlin Cesar
+output: html_document
+---
+
+# Economic and social effects of storms in the US from 1996 to 2011
+
+In this report we investigate the types of storm events with the most economic and social effects in the US from 1996 to 2011. Considering the total number of people injured and fatalities, tornadoes are the most grave type of storm event and, considering the property and crop damage, hurricane typhoons have the greatest consequences.
+
+## Data processing
+
+### Downloading and reading data
+
+First we do a little trick so that the weekdays are printed in English, and not in native system language:
+
+```{r,echo=TRUE, results='hide'}
+Sys.setlocale("LC_TIME", "English")
+```
+
+We begin the data processing by calling the required libraries for the upcoming processing.
+
+```{r,echo=TRUE, results='hide', message=F, warning=F}
+library(plyr)
+library(dplyr)
+library(lubridate)
+```
+
+Next we download the file from the internet. Note that you'll need to adjust the path below to fit your choice of working directory.
+
+```{r,echo=TRUE, results='hide'}
+path  <- "C:/Users/Leonardo/Documents/GitHub/Reproducible-Research-Peer-Assessment-2"
+setwd(path)
+```
+
+The actual file downloading. We had to use the *setInternet2(TRUE)* to avoid a Window-related issue. The data is read and stored in the **dt** data frame.
+
+```{r,echo=TRUE,cache=TRUE}
+setInternet2(TRUE)
+fileUrl<-"https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+download.file(url=fileUrl,destfile = "./source.bz2")
+dt<-read.csv("source.bz2", stringsAsFactors = FALSE)
+```
+
+### Preparing the data for analysis
+
+#### Filtering the date
+
+Now we will do some data cleaning. Firstly, as seen on the [assessment instructions page](https://class.coursera.org/repdata-033/human_grading/view/courses/975146/assessments/4/submissions) and on the [National Climatic Data Center](http://www.ncdc.noaa.gov/stormevents/details.jsp), in the earlier years there were fewer events recorded, so we will considerate only events recorded from 1996 and thereafter.
+
+```{r,echo=TRUE}
+dt2<-mutate(dt,year = year(strptime(dt$BGN_DATE, format = "%m/%d/%Y %H:%M:%S")))
+dt2<-filter(dt2, year >= 1996)
+```
+
+#### Correction - *REFNUM "605943"* case
+
+It was pointed out by a community TA in the [discussion forums](https://class.coursera.org/repdata-033/forum/thread?thread_id=67) that the *REFNUM "605943"* row had a B exponent in the **PROPDMGEXP** variable instead of a M exponent, so we make this correction.
+
+```{r,echo=TRUE}
+dt2[dt2$REFNUM=='605943', "PROPDMGEXP"] <- "M"
+```
+
+#### Property and crop damage multipliers
+
+Next we turn our attention to the property damage **(PROPDMGEXP)** and crop damage **(CROPDMGEXP)** variables. As seen on the [unnoficial codebook](http://ire.org/media/uploads/files/datalibrary/samplefiles/Storm%20Events/layout08.doc) provided by the [Investigative Reports and Editors site](http://ire.org/), these variables indicate by which factor the **PROPDMG** and **CROPDMG**, respectively, should be multiplied so that we can calculate the financial impact of storms.
+
+We do a quick *table* on the **PROPDMGEXP** and **CROPDMGEXP** so that we know which levels are contained in that variable.
+
+```{r,echo=TRUE}
+table(dt2$PROPDMGEXP)
+table(dt2$CROPDMGEXP)
+```
+
+Next we create the lookup tables and merge them with the original data set
+
+```{r,echo=TRUE}
+#Create the lookup tables
+PROPDMGEXP<-c("","0","B","K","M")
+CROPDMGEXP<-c("","0","B","K","M")
+PROPMULTIPLIER<-c(0,0,10^9,10^3,10^6)
+CROPMULTIPLIER<-c(0,0,10^9,10^3,10^6)
+multiplersdt1<-data.frame(PROPDMGEXP,PROPMULTIPLIER)
+multiplersdt2<-data.frame(CROPDMGEXP,CROPMULTIPLIER)
+
+#Merge with the original data set
+dt2<-join(dt2,multiplersdt1)
+dt2<-join(dt2,multiplersdt2)
+```
+
+Finnaly we create the **finimpact** variable that summarises the property damage and crop damage in cash.
+
+```{r,echo=TRUE}
+dt2<-mutate(dt2,finimpact=PROPMULTIPLIER*PROPDMG+CROPMULTIPLIER*CROPDMG)
+```
+
+#### Treating the event types
+
+The main focus of our analysis is to assess which types of events are the most harmful to the US population, so we turn our attention to the **EVTYPE** variable. As it's described in the [unnoficial codebook](http://ire.org/media/uploads/files/datalibrary/samplefiles/Storm%20Events/layout08.doc), **EVTYPE** lists similar storm events using different wording, for example, we have *Ice/Snow* and *ICE/SNOW*. In order to address this, we will make all event names uppercase,without spaces in the beggining or in the end and without ponctuation.
+
+```{r,echo=TRUE}
+#Removing ponctuation
+dt2<-mutate(dt2,EVTYPE = gsub("[[:blank:][:punct:]+]", " ", EVTYPE))
+#Removing blank space in the beggining and in the end
+dt2<-mutate(dt2,EVTYPE = gsub("^\\s+|\\s+$", "", EVTYPE))
+#Making everything uppercase
+dt<-mutate(dt2,EVTYPE2 = toupper(EVTYPE))
+#Save only the final data frame
+rm(dt2)
+```
+
+Some remarks:
+
+* We wont treat the rows which  __EVTYPE__ is something like _summary of..._ followed by a month and a number, because, for these cases, the property damage and crop damages are all equal to zero. This was pointed out in the [discussion forums](https://class.coursera.org/repdata-033/forum/thread?thread_id=79).
+
+* The [assessment instructions page](https://class.coursera.org/repdata-033/human_grading/view/courses/975146/assessments/4/submissions) asks in the _Questions_ section, to use the types of events as indicated in the __EVTYPE__ variable, so we wont make any modification to it, although it would be possible.
+
+## Results
+
+### Most harmful types of events to population health
+
+In this section we will address the questions issued in the assessment. 
+
+First we will look for the most harmful types of events to population health. We will sum the number of fatalities (**FATALITIES** variable) and injuries (**INJURIES**  variable) to quantify the impact of the event on the population health.
+
+```{r,echo=TRUE}
+#We create the HEALTHIMPACT variable
+dt<-mutate(dt,HEALTHIMPACT = FATALITIES+INJURIES)
+#Group the data frame by event type and sum the HEALTHIMPACT
+summarized<- aggregate(HEALTHIMPACT ~ EVTYPE2,data = dt, sum)
+#Sort the data frame in descending order by HEALTHIMPACT
+summarized<-arrange(summarized,desc(HEALTHIMPACT))
+#Save the top 10 for plotting
+toplot<-summarized[1:10,]
+#Do the plot
+par(las=2)
+par(mar=c(5,8,4,2))
+barplot(main = "Top 10 Events with the most impact on the population health 
+        (injuries+fatalities)",
+        height    = rev(toplot$HEALTHIMPACT), 
+        names.arg = rev(toplot$EVTYPE2),
+        horiz=TRUE,
+        cex.names = 0.7,
+        axis.lty  = 1)
+```
+
+As shown in the plot above, tornado, excessive heat and flood are the top 3 events with the most impact on the population health, considering the number of people injured and fatalities.
+
+Now we do the same analysis but for the number of fatalities and injuries separately.
+
+```{r,echo=TRUE}
+summarized<- aggregate(FATALITIES ~ EVTYPE2,data = dt, sum)
+summarized<-arrange(summarized,desc(FATALITIES))
+toplot<-summarized[1:10,]
+
+#Do the plot
+par(las=2)
+par(mar=c(5,8,4,2))
+barplot(main = "Top 10 Events with the most impact on the population health 
+        (fatalities)",
+        height    = rev(toplot$FATALITIES), 
+        names.arg = rev(toplot$EVTYPE2),
+        horiz=TRUE,
+        cex.names = 0.7,
+        axis.lty  = 1)
+```
+
+```{r,echo=TRUE}
+summarized<- aggregate(INJURIES ~ EVTYPE2,data = dt, sum)
+summarized<-arrange(summarized,desc(INJURIES))
+toplot<-summarized[1:10,]
+
+#Do the plot
+par(las=2)
+par(mar=c(5,8,4,2))
+barplot(main = "Top 10 Events with the most impact on the population health 
+        (injuries)",
+        height    = rev(toplot$INJURIES), 
+        names.arg = rev(toplot$EVTYPE2),
+        horiz=TRUE,
+        cex.names = 0.7,
+        axis.lty  = 1)
+```
+
+As shown in the plots above, the top 3 events with the most impact on the population health are the same as before, but considering just the number of people injured the number one is tornado, and considering the fatalities the number one is excessive heat.
+
+### Events with the most severe economic consequences
+
+Finally we do a similar analysis in order to find the events with the most severe economic consequences. We will use the **finimpact** variable that summarises the property damage and crop damage in cash, which we created in the data proccessing step.
+
+```{r,echo=TRUE}
+#Group the data frame by event type and sum the finimpact
+summarized<- aggregate(finimpact ~ EVTYPE2,data = dt, sum)
+#Sort the data frame in descending order by finimpact
+summarized<-arrange(summarized,desc(finimpact))
+#Save the top 10 for plotting
+toplot<-summarized[1:10,]
+#Do the plot
+par(las=2)
+par(mar=c(5,8,4,2))
+barplot(main = "Top 10 Events with the most economic impact 
+          (property+crop damage)",
+        height    = rev(toplot$finimpact), 
+        names.arg = rev(toplot$EVTYPE2),
+        horiz=TRUE,
+        cex.names = 0.7,
+        axis.lty  = 1)
+```
+
+As shown in the plots above, the top 3 events with the events with the most severe economic consequences are hurricane typhoon, storme surge and flood.
